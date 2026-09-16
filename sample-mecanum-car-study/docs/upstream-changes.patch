@@ -1,0 +1,1303 @@
+diff --git a/hardware/Inc/delay.h b/hardware/Inc/delay.h
+index a861cc9..8fdb338 100644
+--- a/hardware/Inc/delay.h
++++ b/hardware/Inc/delay.h
+@@ -27,7 +27,7 @@
+ #define __DELAY_H
+ 
+ /* Includes ------------------------------------------------------------------*/
+-#include "main.h"
++#include <stdint.h>
+ 
+ 
+ // OpenCTR 接口函数
+diff --git a/hardware/Inc/main.h b/hardware/Inc/main.h
+index f74ec96..97065b1 100644
+--- a/hardware/Inc/main.h
++++ b/hardware/Inc/main.h
+@@ -1,37 +1,7 @@
+-#ifndef __MAIN_H
+-#define __MAIN_H
+-
+-#define MOTOR_NO_PID // 不使用PID控制底盘电机
+-
+-// 标准库
+-#include <stdint.h>
+-#include <stddef.h>
+-#include <stdlib.h>
+-#include <math.h>
+-
+-// stm32库
+-#include <stm32f10x.h>
+-#include <stm32f10x_gpio.h>
+-#include <stm32f10x_tim.h>
+-#include <stm32f10x_rcc.h>
+-#include <misc.h>
+-
+-// 借来的代码
+-#include "delay.h"
+-#include "sys.h"
+-
+-// 自己的代码
+-#include <pwm.h>
+-#include <ps2.h>
+-#include <motor.h>
+-
+-#endif
+-
+-/*
+-TIM23 -> PWM
+-L123 -> L298N
+-             TIM3                 TIM2       ------------L3
+-B11 B10 (B1 B0 A7 A6) A5 A4 (A3 A2 A1 A0)   (C15 C14 C13|
+-       PS2              L1               L2  -----|     |     TIM4     
+-(B12 B13 B14 B15) (A8 A9 A10 A11) (A12 A15 B3 B4) |  B5 ) (B6 B7 B8 B9) 
+-*/
++#ifndef APP_MAIN_H
++#define APP_MAIN_H
++#include "delay.h"
++#include "motor.h"
++#include "ps2.h"
++#include "pwm.h"
++#endif
+diff --git a/hardware/Inc/motor.h b/hardware/Inc/motor.h
+index 5b6fb0b..b204c05 100644
+--- a/hardware/Inc/motor.h
++++ b/hardware/Inc/motor.h
+@@ -1,14 +1,19 @@
+-#ifndef __MOTOR_H
+-#define __MOTOR_H
+-
+-#include "main.h"
+-
+-// 如果不使用PID控制底盘电机则定义MOTOR_NO_PID
+-
+-// 初始化电机
+-void motor_init(void);
+-
+-// 设置电机速度
+-void motor(float translation_x, float translation_y, float rotation);
+-
+-#endif
++#ifndef MOTOR_H
++#define MOTOR_H
++#include <stdint.h>
++
++/* 实测回中范围后再调整；默认 120～136（含端点）均视为回中。 */
++#define JOYSTICK_CENTER       128
++#define JOYSTICK_DEADZONE     8
++#define MOTOR_ROTATION_SCALE  0.4f
++
++#if JOYSTICK_DEADZONE < 0 || JOYSTICK_DEADZONE >= 127
++#error JOYSTICK_DEADZONE must be between 0 and 126
++#endif
++
++void motor_init(void);
++void motor_stop(void);
++uint8_t motor_joystick_is_centered(uint8_t value);
++/* 参数仍是 0～255 的原始摇杆值，不是转速；正方向沿用原项目。 */
++void motor(float joystick_forward, float joystick_sideways, float joystick_turn);
++#endif
+diff --git a/hardware/Inc/ps2.h b/hardware/Inc/ps2.h
+index e0af4fe..bb67d82 100644
+--- a/hardware/Inc/ps2.h
++++ b/hardware/Inc/ps2.h
+@@ -1,53 +1,39 @@
+-/**
+- *   PS2数据定义
+- *   BYTE   DATA   解释
+- *   01     idle
+- *   02     0x73   手柄工作模式
+- *   03     0x5A   Bit0  Bit1  Bit2  Bit3  Bit4  Bit5  Bit6  Bit7
+- *   04     data   SLCT  JOYR  JOYL  STRT   UP  RGIHT  DOWN  LEFT
+- *   05     data    L2    R2    L1    R1    Y     B     A     X
+- *   06     data   右边摇杆  0x00 = 左    0xff = 右
+- *   07     data   右边摇杆  0x00 = 上    0xff = 下
+- *   08     data   左边摇杆  0x00 = 左    0xff = 右
+- *   09     data   左边摇杆  0x00 = 上    0xff = 下
+- *
+- * PA4 -> DI
+- * PA5 -> CMD
+- * PA6 -> CS
+- * PA7 -> CLK
+- */
+-
+-#ifndef __PS2_H
+-#define __PS2_H
+-
+-#include "main.h"
+-
+-// --------------------------------VAULE--------------------------------
+-// 变量定义PS2手柄键值数据结构体
+-typedef struct
+-{
+-    uint8_t mode; /* 手柄的工作模式 */
+-                  /* Bit0  Bit1  Bit2  Bit3  Bit4  Bit5  Bit6  Bit7 */
+-    uint8_t btn1; /* SLCT  JOYR  JOYL  STRT   UP  RIGHT  DOWN  LEFT */
+-
+-    uint8_t btn2; /*  L2    R2    L1    R1    Y     A     B     X   */
+-
+-    uint8_t RJoy_LR; /* 右边摇杆  0x00 = 左    0xff = 右 */
+-
+-    uint8_t RJoy_UD; /* 右边摇杆  0x00 = 上    0xff = 下 */
+-
+-    uint8_t LJoy_LR; /* 左边摇杆  0x00 = 左    0xff = 右 */
+-
+-    uint8_t LJoy_UD; /* 左边摇杆  0x00 = 上    0xff = 下 */
+-
+-} ps2_data;
+-
+-// --------------------------------FUNCTION-------------------------------- 函数定义
+-// ----------------INIT---------------- PS2初始化
+-void ps2_init(void);
+-
+-// ----------------CONTROL----------------
+-uint8_t ps2_comm(uint8_t sendData); // PS2通信
+-void ps2_read(ps2_data *ps2Data);   // PS2获取按键及摇杆数值
+-
+-#endif
++#ifndef PS2_H
++#define PS2_H
++#include <stdint.h>
++
++/* 以 ps2.c 接线为准；原头文件中 PA4～PA7 的注释已过时。
++ * DATA -> PB12（输入）；CMD -> PB13；CS/ATT -> PB14；CLK -> PB15。
++ * 只接受 0x73 的 9 字节模拟模式，不支持 0x41 数字/0x79 压感模式。
++ */
++#define PS2_MODE_ANALOG  0x73U
++#define PS2_FRAME_SIZE   9U
++
++/* btn1 的 bit0～7 对应编号 0～7；btn2 对应 8～15。
++ * 使用标准 PS2 名称，避免不同手柄的 A/B/X/Y 丝印差异。
++ */
++enum
++{
++    PS2_BUTTON_SELECT = 0, PS2_BUTTON_L3, PS2_BUTTON_R3, PS2_BUTTON_START,
++    PS2_BUTTON_UP, PS2_BUTTON_RIGHT, PS2_BUTTON_DOWN, PS2_BUTTON_LEFT,
++    PS2_BUTTON_L2, PS2_BUTTON_R2, PS2_BUTTON_L1, PS2_BUTTON_R1,
++    PS2_BUTTON_TRIANGLE, PS2_BUTTON_CIRCLE, PS2_BUTTON_CROSS, PS2_BUTTON_SQUARE,
++    PS2_BUTTON_COUNT
++};
++
++typedef struct
++{
++    uint8_t mode;
++    uint8_t btn1;     /* 取反后的状态：1 按下，0 松开 */
++    uint8_t btn2;
++    uint8_t RJoy_LR;  /* 0 左，255 右，回中约 128 */
++    uint8_t RJoy_UD;  /* 0 上，255 下 */
++    uint8_t LJoy_LR;
++    uint8_t LJoy_UD;
++} ps2_data;
++
++void ps2_init(void); /* 仅配置 GPIO；未实现模式协商，请在手柄上切换模式 */
++uint8_t ps2_comm(uint8_t send_data);
++/* 1：本帧模式/标志有效；0：无效，且数据已清成无按键、摇杆回中。 */
++uint8_t ps2_read(ps2_data *data);
++#endif
+diff --git a/hardware/Inc/pwm.h b/hardware/Inc/pwm.h
+index 514bcad..08c77e0 100644
+--- a/hardware/Inc/pwm.h
++++ b/hardware/Inc/pwm.h
+@@ -1,26 +1,26 @@
+-#ifndef __PWM_H
+-#define __PWM_H
+-
+-#include "main.h"
+-
+-// --------------------------------DEFINE--------------------------------参数定义
+-#define ARR 20000 // ARR 周期 （0~65535）10K频绿下计10000个数 1秒
+-#define PSC 72    // PSC 预分频器 （0~65535）72M进行7200分频（20KHz）
++#ifndef PWM_H
++#define PWM_H
++/* 暂时保留原频率，不替电机选择新参数。
++ * 正常时钟配置下 TIM3 时钟为 72 MHz：
++ * PWM频率 = 72000000 / 72 / 20000 = 50 Hz，原注释的 kHz 数值不正确。
++ * 寄存器 ARR = 周期计数数 - 1；PSC = 分频倍数 - 1。
++ * TODO_DRV8833：结合 TT 电机、驱动板和实测重新选择频率与引脚。
++ */
++#define PWM_PERIOD_COUNTS  20000U
++#define PWM_PRESCALER_DIV  72U
++/* CCR 需要能表示 PERIOD_COUNTS，才能得到精确的 100% 占空比。 */
++#if PWM_PERIOD_COUNTS < 1 || PWM_PERIOD_COUNTS > 65535
++#error PWM_PERIOD_COUNTS must fit a 16-bit compare register
++#endif
++#if PWM_PRESCALER_DIV < 1 || PWM_PRESCALER_DIV > 65536
++#error PWM_PRESCALER_DIV is outside the timer range
++#endif
+ 
+-// --------------------------------FUNCTION--------------------------------函数定义
+-// ----------------INIT---------------- PWM初始化函数
+ void pwm_init(void);
+-
+-// ----------------CONTROL---------------- 底盘的PWM设置
++void pwm_stop_all(void);
++/* duty 是 0.0～1.0；负值/NaN 归零，超过 1 的值限制为 1。 */
+ void pwm_set1(float duty);
+ void pwm_set2(float duty);
+ void pwm_set3(float duty);
+ void pwm_set4(float duty);
+-
+-// ----------------CONTROL---------------- 发射器的pwm设置
+-
+-void pwm_set5(float angle);
+-void pwm_set6(float angle);
+-void pwm_set7(float duty);
+-
+ #endif
+diff --git a/hardware/Inc/sys.h b/hardware/Inc/sys.h
+index b5ce153..b1f13e4 100644
+--- a/hardware/Inc/sys.h
++++ b/hardware/Inc/sys.h
+@@ -26,7 +26,7 @@
+ #define __SYS_H
+ 
+ /* Includes ------------------------------------------------------------------*/	 
+-#include "main.h"
++#include "stm32f10x.h"
+ 
+ ///************** 位带操作，实现类51GPIO控制*********************************/
+ ////IO口操作宏定义
+diff --git a/hardware/Src/delay.c b/hardware/Src/delay.c
+index ed8c7de..523a970 100644
+--- a/hardware/Src/delay.c
++++ b/hardware/Src/delay.c
+@@ -1,111 +1,73 @@
+-/**			                                                    
+-		   ____                    _____ _______ _____       XTARK@塔克创新
+-		  / __ \                  / ____|__   __|  __ \ 
+-		 | |  | |_ __   ___ _ __ | |       | |  | |__) |
+-		 | |  | | '_ \ / _ \ '_ \| |       | |  |  _  / 
+-		 | |__| | |_) |  __/ | | | |____   | |  | | \ \ 
+-		  \____/| .__/ \___|_| |_|\_____|  |_|  |_|  \_\
+-				| |                                     
+-				|_|                OpenCTR   机器人控制器
+-									 
+-  ****************************************************************************** 
+-  *           
+-  * 版权所有： XTARK@塔克创新  版权所有，盗版必究
+-  * 公司网站： www.xtark.cn   www.tarkbot.com
+-  * 淘宝店铺： https://xtark.taobao.com  
+-  * 塔克微信： 塔克创新（关注公众号，获取最新更新资讯）
+-  *      
+-  ******************************************************************************
+-  * @作  者  塔克创新团队
+-  * @内  容  软件延时函数
+-  ******************************************************************************
+-  * @说  明
+-  *
+-  * 1.延时函数使用滴答时钟实现
+-  * 
+-  ******************************************************************************
+-  */
+-
+-#include "delay.h"
+-
+-/**
+-  * @简  述  延时函数初始化
+-  * @参  数  无
+-  * @返回值  无
+-  */
+-void delay_init(void) 
+-{	
+-	//延时函数SysTick配置
+-	SysTick_CLKSourceConfig(SysTick_CLKSource_HCLK_Div8); 	//时钟固定为AHB时钟的1/8
+-}
+-
+-/**
+-  * @简  述  软件微妙延时
+-  * @参  数  us：延时长度，单位us	  
+-  * @返回值  无
+-  */
+-void delay_us(uint16_t us)
+-{
+-	uint32_t temp;
+-	
+-	SysTick->LOAD=9*us; 				 		 
+-	SysTick->VAL=0x00;        				
+-	SysTick->CTRL|=SysTick_CTRL_ENABLE_Msk ;  	 
+-	
+-	do
+-	{
+-		temp=SysTick->CTRL;
+-	}
+-	while((temp&0x01)&&!(temp&(1<<16)));	 
+-	
+-	SysTick->CTRL&=~SysTick_CTRL_ENABLE_Msk; 
+-	SysTick->VAL =0X00;       				
+-}
+-/**
+-  * @简  述  软件毫妙级延时函数。
+-  * @参  数  ms：延时长度，单位ms	  	  
+-  * @返回值  无
+-  * @说  明  注意ms的范围，SysTick->LOAD为24位寄存器,所以,最大延时为:nTime<=0xffffff*8*1000/SYSCLK
+-  *          对72M条件下,ms<=1864ms 
+-  */
+-static void _delay_ms(uint16_t ms)
+-{	 		  	  
+-	uint32_t temp;	
+-	
+-	SysTick->LOAD=(uint32_t)9000*ms;
+-	SysTick->VAL =0x00;
+-	SysTick->CTRL|=SysTick_CTRL_ENABLE_Msk;
+-	
+-	do
+-	{
+-		temp=SysTick->CTRL;
+-	}while((temp&0x01)&&!(temp&(1<<16)));	
+-	
+-	SysTick->CTRL&=~SysTick_CTRL_ENABLE_Msk;      
+-	SysTick->VAL =0X00;     		  		 	    
+-}
+-
+-/**
+-  * @简  述  软件毫秒延时
+-  * @参  数  ms：延时长度，单位ms	  	 	  
+-  * @返回值  无
+-  */
+-void delay_ms(uint16_t ms)
+-{
+-	uint8_t repeat=ms/500;																
+-	uint16_t remain=ms%500;
+-	
+-	while(repeat)
+-	{
+-		_delay_ms(500);
+-		repeat--;
+-	}
+-	
+-	if(remain)
+-	{
+-		_delay_ms(remain);
+-	}
+-}
+-
+-
+-/******************* (C) 版权 2023 XTARK **************************************/
++/**
++		   ____                    _____ _______ _____       XTARK@塔克创新
++		  / __ \                  / ____|__   __|  __ \
++		 | |  | |_ __   ___ _ __ | |       | |  | |__) |
++		 | |  | | '_ \ / _ \ '_ \| |       | |  |  _  /
++		 | |__| | |_) |  __/ | | | |____   | |  | | \ \
++		  \____/| .__/ \___|_| |_|\_____|  |_|  |_|  \_\
++				| |
++				|_|                OpenCTR   机器人控制器
++
++  ******************************************************************************
++  *
++  * 版权所有： XTARK@塔克创新  版权所有，盗版必究
++  * 公司网站： www.xtark.cn   www.tarkbot.com
++  * 淘宝店铺： https://xtark.taobao.com
++  * 塔克微信： 塔克创新（关注公众号，获取最新更新资讯）
++  *
++  ******************************************************************************
++  * @作  者  塔克创新团队
++  * @内  容  软件延时函数
++  ******************************************************************************
++  * @说  明
++  *
++  * 1.延时函数使用滴答时钟实现
++  *
++  ******************************************************************************
++  */
++
++#include "delay.h"
++#include "stm32f10x.h"
++
++/* 本项目独占 SysTick 做阻塞延时，不能同时拿它作 RTOS/毫秒中断时基。
++ * 相对上游修改：从实际时钟计算计数数，处理 us=0，纠正 LOAD 的减一。
++ * 保留上方原始来源声明。
++ */
++static uint32_t ticks_per_us;
++
++void delay_init(void)
++{
++    SystemCoreClockUpdate();
++    ticks_per_us = SystemCoreClock / 1000000U;
++    /* STM32F103 本项目使用 72 MHz，HSE 启动失败回到 HSI 时为 8 MHz。 */
++    SysTick->CTRL = 0;
++    SysTick_CLKSourceConfig(SysTick_CLKSource_HCLK);
++}
++
++void delay_us(uint16_t us)
++{
++    if (us == 0)
++    {
++        return;
++    }
++    /* 最大 65535 us，在 72 MHz 下也不超过 24 位 LOAD 范围。 */
++    SysTick->LOAD = ticks_per_us * us - 1U;
++    SysTick->VAL = 0;
++    SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
++    while ((SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk) == 0)
++    {
++        /* 等待计数完成。此函数不能在中断中重入调用。 */
++    }
++    SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
++    SysTick->VAL = 0;
++}
++
++void delay_ms(uint16_t ms)
++{
++    /* 每次等待 1 ms，避免长延时超出 SysTick 的计数范围。 */
++    while (ms > 0)
++    {
++        delay_us(1000);
++        ms--;
++    }
++}
+diff --git a/hardware/Src/main.c b/hardware/Src/main.c
+index 7421e51..d91fe77 100644
+--- a/hardware/Src/main.c
++++ b/hardware/Src/main.c
+@@ -1,116 +1,116 @@
+-/**
+- * 主程序
+- *
+- * 读取ps2数据 -> 执行按键操作 -> 底盘电机运动
+- *
+- *
+- * 引脚定义
+- *
+- * 使用了PORTA PORTB
+- *
+- * motor PWM引脚定义
+- * 1 -> PA6
+- * 2 -> PA7
+- * 3 -> PB0
+- * 4 -> PB1
+- *
+- * motor逻辑引脚定义
+- * 1 -> PA8 PA9
+- * 2 -> PA10 PA11
+- * 3 -> PA5 PA4
+- * 4 -> PA3 PA2
+- *
+- * ps2数据引脚定义
+- * DATA -> PB12
+- * CMD -> PB13
+- * CS -> PB14
+- * CLK -> PB15
++/* 学习顺序：main.c -> ps2.c -> motor.c -> pwm.c。
++ * 每轮：读手柄 -> 检查有效性/回中 -> 处理按键 -> 更新底盘 -> 等待。
++ * L298N 接口仍保留。未来换 DRV8833 请搜索 TODO_DRV8833。
++ * TODO_LINK_LOSS：接收器若重复返回有效旧帧，本程序无法识别无线失联。
++ * TODO_WATCHDOG：主循环卡死/硬件异常后的独立停机措施仍需设计。
+  */
+-
+ #include "main.h"
+ 
+-char *test = "";
++#define CONTROL_LOOP_DELAY_MS  10U
++static ps2_data ps2Data;
++static uint8_t control_ready = 0;
++static uint8_t button_was_down[PS2_BUTTON_COUNT] = {0};
++
++/* Keil Watch 可观察；255 表示尚无松开事件。不会控制任何舵机。 */
++volatile uint8_t last_released_button = 255U;
+ 
+-void temp(void)
++static void buttons_reset(void)
+ {
+-    test = "temp";
++    uint8_t button;
++    for (button = 0; button < PS2_BUTTON_COUNT; button++)
++    {
++        button_was_down[button] = 0;
++    }
+ }
+ 
+-// --------------------------------VAULE-------------------------------- 变量定义
+-uint8_t i = 1;          // 用于循环计数读取按键函数
+-ps2_data ps2Data;       // 用于存储PS2手柄数据
+-void (*cmd[16])(void) = // 用于存储函数指针
++/* 用 switch 代替原函数指针数组：以后在相应 case 里写自己的动作。 */
++static void on_button_released(uint8_t button)
++{
++    last_released_button = button;
++    switch (button)
+     {
+-        // btn1
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        // btn2
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        temp,
+-        temp};
+-
+-uint8_t btn[16] = {0}; //
++        case PS2_BUTTON_CROSS:
++            /* TODO_GRIPPER：例如夹爪闭合，目前不驱动舵机。 */
++            break;
++        case PS2_BUTTON_CIRCLE:
++            /* TODO_GRIPPER：例如夹爪打开，目前不驱动舵机。 */
++            break;
++        default:
++            /* 其余按键暂时只记录编号。动作不要长时间阻塞主循环。 */
++            break;
++    }
++}
+ 
+-int main(void)
++static void buttons_process(const ps2_data *data)
+ {
+-    // ----------------INIT---------------- 初始化
+-    delay_init();
+-    pwm_init();
+-    ps2_init();
+-    motor_init();
+-
+-    // ----------------WHILE---------------- 开始运行
+-    while (1)
++    uint8_t button;
++    uint8_t is_down;
++    for (button = 0; button < PS2_BUTTON_COUNT; button++)
+     {
+-        // ---------------- 读取PS2数据
+-        ps2_read(&ps2Data);
+-
+-                // ---------------- 按键
+-        // btn1
+-        for (i = 0; i < 8; i++)
++        /* 先选按键组，再提取对应的那一位。 */
++        if (button < 8)
++        {
++            is_down = (uint8_t)((data->btn1 >> button) & 1U);
++        }
++        else
+         {
+-            if (((ps2Data.btn1 >> i) & 1) != 0)
+-            {
+-                btn[i] = 1;
+-            }
+-            else if (btn[i] == 1)
+-            {
+-                btn[i] = 0;
+-                cmd[i]();
+-            }
++            is_down = (uint8_t)((data->btn2 >> (button - 8)) & 1U);
+         }
+-        // btn2
+-        for (i = 0; i < 8; i++)
++        /* 沿用原项目：从“按下”变成“松开”时，只执行一次。 */
++        if (button_was_down[button] && !is_down)
+         {
+-            if (((ps2Data.btn2 >> i) & 1) != 0)
+-            {
+-                btn[i + 8] = 1;
+-            }
+-            else if (btn[i + 8] == 1)
+-            {
+-                btn[i + 8] = 0;
+-                cmd[i + 8]();
+-            }
++            on_button_released(button);
+         }
++        button_was_down[button] = is_down;
++    }
++}
++
++static uint8_t controls_are_neutral(const ps2_data *data)
++{
++    return motor_joystick_is_centered(data->LJoy_UD) &&
++           motor_joystick_is_centered(data->LJoy_LR) &&
++           motor_joystick_is_centered(data->RJoy_LR) &&
++           data->btn1 == 0 && data->btn2 == 0;
++}
+ 
+-        // ---------------- 底盘移动
+-        if (ps2Data.mode == 0x73) // 绿灯模式
++/* 单独写成一步，方便逐次调试，也能在电脑上测试异常/恢复的过程。 */
++static void control_step(void)
++{
++    uint8_t frame_valid = ps2_read(&ps2Data);
++    if (!frame_valid)
++    {
++        motor_stop();
++        control_ready = 0;
++        buttons_reset(); /* 丢包不能被当成“用户松开按钮”。 */
++        return;
++    }
++    if (!control_ready)
++    {
++        motor_stop();
++        buttons_reset();
++        /* 上电/异常恢复后，先松开按键并让三个控制轴回中。 */
++        if (controls_are_neutral(&ps2Data))
+         {
+-            motor((float)ps2Data.LJoy_UD, (float)ps2Data.LJoy_LR, (float)ps2Data.RJoy_LR);
++            control_ready = 1;
+         }
++        return;
++    }
++    buttons_process(&ps2Data);
++    /* uint8_t 会自动转换为函数需要的 float；这里不做速度换算。 */
++    motor(ps2Data.LJoy_UD, ps2Data.LJoy_LR, ps2Data.RJoy_LR);
++}
+ 
+-        // ----------------延时
+-        delay_ms(10);
++int main(void)
++{
++    delay_init();
++    motor_init(); /* 先让方向引脚保持低电平 */
++    pwm_init();   /* PWM 从零输出启动 */
++    motor_stop();
++    ps2_init();
++    while (1)
++    {
++        control_step();
++        /* 通信和计算也耗时，循环总周期不是精确的 10 ms。 */
++        delay_ms(CONTROL_LOOP_DELAY_MS);
+     }
+ }
+diff --git a/hardware/Src/motor.c b/hardware/Src/motor.c
+index 23a480b..5552e37 100644
+--- a/hardware/Src/motor.c
++++ b/hardware/Src/motor.c
+@@ -1,104 +1,127 @@
+-#include "motor.h"
+-
+-float v1, v2, v3, v4; // 四个电机速度
+-float vx, vy, vr;
+-
+-// 初始化电机
+-void motor_init()
+-{
+-    // 初始化L298N逻辑引脚
+-    GPIO_InitTypeDef GPIO_InitStructure;
+-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_8 | GPIO_Pin_9 | GPIO_Pin_10 | GPIO_Pin_11 | GPIO_Pin_5 | GPIO_Pin_4 | GPIO_Pin_3 | GPIO_Pin_2;
+-    GPIO_Init(GPIOA, &GPIO_InitStructure);
+-}
+-
+-// 摇杆数据映射函数 [0, 255] -> [255, 0] -> [-1, 1]
+-static float motor_map(float value)
+-{
+-    value = 255 - value;
+-    if (value >= 128)
+-    {
+-        return (value - 128) / 127;
+-    }
+-    else
+-    {
+-        return (value / 127) - 1;
+-    }
+-}
+-
+-/**
+- * @brief 控制底盘电机
+- *
+- * @param translation_x X轴平移速度
+- * @param translation_y Y轴平移速度
+- * @param rotation 旋转速度
+- *
+- * @note 参数实际是遥杆的数据
+- */
+-void motor(float translation_x, float translation_y, float rotation)
+-{
+-    // 摇杆数据映射为 [-1 , 1]
+-    vx = motor_map(translation_x);
+-    vy = motor_map(translation_y);
+-    vr = motor_map(rotation) * 0.4;
+-
+-    // 计算速度
+-    v1 = (vx + vy) / 2 - vr;
+-    v2 = (vx - vy) / 2 - vr;
+-    v3 = (vx - vy) / 2 + vr;
+-    v4 = (vx + vy) / 2 + vr;
+-
+-    // 设置电机速度
+-    pwm_set1(fabs(v1));
+-    pwm_set2(fabs(v2));
+-    pwm_set3(fabs(v3));
+-    pwm_set4(fabs(v4));
+-
+-    // 设置电机方向
+-    // motor1
+-    if (v1 > 0)
+-    {
+-        PAout(8) = 1;
+-        PAout(9) = 0;
+-    }
+-    else
+-    {
+-        PAout(8) = 0;
+-        PAout(9) = 1;
+-    }
+-    // motor2
+-    if (v2 > 0)
+-    {
+-        PAout(10) = 1;
+-        PAout(11) = 0;
+-    }
+-    else
+-    {
+-        PAout(10) = 0;
+-        PAout(11) = 1;
+-    }
+-    // motor3
+-    if (v3 > 0)
+-    {
+-        PAout(5) = 1;
+-        PAout(4) = 0;
+-    }
+-    else
+-    {
+-        PAout(5) = 0;
+-        PAout(4) = 1;
+-    }
+-    // motor4
+-    if (v4 > 0)
+-    {
+-        PAout(3) = 1;
+-        PAout(2) = 0;
+-    }
+-    else
+-    {
+-        PAout(3) = 0;
+-        PAout(2) = 1;
+-    }
+-}
++#include "motor.h"
++#include "pwm.h"
++#include "stm32f10x.h"
++
++#define MOTOR_DIRECTION_PINS (GPIO_Pin_8 | GPIO_Pin_9 | GPIO_Pin_10 | GPIO_Pin_11 | \
++                              GPIO_Pin_5 | GPIO_Pin_4 | GPIO_Pin_3 | GPIO_Pin_2)
++
++void motor_init(void)
++{
++    GPIO_InitTypeDef gpio;
++    /* TODO_DRV8833：仍是 L298N 的 8 个方向引脚，未来按新接口重配。 */
++    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
++    GPIO_ResetBits(GPIOA, MOTOR_DIRECTION_PINS);
++    GPIO_StructInit(&gpio);
++    gpio.GPIO_Pin = MOTOR_DIRECTION_PINS;
++    gpio.GPIO_Mode = GPIO_Mode_Out_PP;
++    gpio.GPIO_Speed = GPIO_Speed_50MHz;
++    GPIO_Init(GPIOA, &gpio);
++}
++
++uint8_t motor_joystick_is_centered(uint8_t value)
++{
++    return value >= JOYSTICK_CENTER - JOYSTICK_DEADZONE &&
++           value <= JOYSTICK_CENTER + JOYSTICK_DEADZONE;
++}
++
++/* 0～255 -> -1～1，沿用原方向：原始值小于中心时为正。
++ * 回中区为 0；从死区边缘连续增长，端点 0/255 对应 +1/-1。
++ */
++static float motor_map(float value)
++{
++    float offset;
++    if (!(value >= 0.0f && value <= 255.0f))
++    {
++        return 0.0f; /* 拒绝非法数值，包括 NaN。 */
++    }
++    offset = JOYSTICK_CENTER - value;
++    if (offset > JOYSTICK_DEADZONE)
++    {
++        return (offset - JOYSTICK_DEADZONE) /
++               (JOYSTICK_CENTER - JOYSTICK_DEADZONE);
++    }
++    if (offset < -JOYSTICK_DEADZONE)
++    {
++        return (offset + JOYSTICK_DEADZONE) /
++               (255 - JOYSTICK_CENTER - JOYSTICK_DEADZONE);
++    }
++    return 0.0f;
++}
++
++static float absolute_value(float value)
++{
++    return value < 0.0f ? -value : value;
++}
++
++/* TODO_DRV8833：L298N 用 IN1/IN2 控方向，另有 EN 接收 PWM。
++ * DRV8833 的双输入控制不同，不能原样复用这段输出。
++ */
++static void l298n_set_direction(uint16_t pin1, uint16_t pin2, float output)
++{
++    GPIO_ResetBits(GPIOA, pin1 | pin2);
++    if (output > 0.0f)
++    {
++        GPIO_SetBits(GPIOA, pin1);
++    }
++    else if (output < 0.0f)
++    {
++        GPIO_SetBits(GPIOA, pin2);
++    }
++    /* 零输出时两个方向引脚保持低。 */
++}
++
++void motor_stop(void)
++{
++    /* TODO_DRV8833：重做新驱动的滑行/制动输入组合。
++     * 当前 EN=0 只撤掉驱动，不保证车轮瞬间静止。
++     */
++    pwm_stop_all();
++    GPIO_ResetBits(GPIOA, MOTOR_DIRECTION_PINS);
++}
++
++void motor(float joystick_forward, float joystick_sideways, float joystick_turn)
++{
++    float forward = motor_map(joystick_forward);
++    float sideways = motor_map(joystick_sideways);
++    float turn = motor_map(joystick_turn) * MOTOR_ROTATION_SCALE;
++    float output[4];
++    float largest = 1.0f;
++    float magnitude;
++    uint8_t wheel;
++
++    /* 沿用原四轮组合和编号，实际轮位需架空确认。
++     * 这是开环输出比例，不是编码器测得的轮速，没有 PID。
++     */
++    output[0] = (forward + sideways) / 2.0f - turn;
++    output[1] = (forward - sideways) / 2.0f - turn;
++    output[2] = (forward - sideways) / 2.0f + turn;
++    output[3] = (forward + sideways) / 2.0f + turn;
++
++    /* 超过 1 时四轮一起缩小，保留四轮之间的比例。 */
++    for (wheel = 0; wheel < 4; wheel++)
++    {
++        magnitude = absolute_value(output[wheel]);
++        if (magnitude > largest)
++        {
++            largest = magnitude;
++        }
++    }
++    for (wheel = 0; wheel < 4; wheel++)
++    {
++        output[wheel] /= largest;
++    }
++
++    /* TODO_DRV8833：下面整段是将输出落到旧驱动上的位置。
++     * 先关 EN，再改方向，最后给新 PWM，避免用旧占空比切换方向。
++     * 尚未实现电机反转缓冲/斜坡，相关参数需实车再定。
++     */
++    pwm_stop_all();
++    l298n_set_direction(GPIO_Pin_8, GPIO_Pin_9, output[0]);
++    l298n_set_direction(GPIO_Pin_10, GPIO_Pin_11, output[1]);
++    l298n_set_direction(GPIO_Pin_5, GPIO_Pin_4, output[2]);
++    l298n_set_direction(GPIO_Pin_3, GPIO_Pin_2, output[3]);
++    pwm_set1(absolute_value(output[0]));
++    pwm_set2(absolute_value(output[1]));
++    pwm_set3(absolute_value(output[2]));
++    pwm_set4(absolute_value(output[3]));
++}
+diff --git a/hardware/Src/ps2.c b/hardware/Src/ps2.c
+index 690e84c..de40095 100644
+--- a/hardware/Src/ps2.c
++++ b/hardware/Src/ps2.c
+@@ -1,138 +1,99 @@
+-/**
+- *   PS2数据定义
+- *   BYTE   DATA   解释
+- *   01     idle
+- *   02     0x73   手柄工作模式
+- *   03     0x5A   Bit0  Bit1  Bit2  Bit3  Bit4  Bit5  Bit6  Bit7
+- *   04     data   SLCT  JOYR  JOYL  STRT   UP   RGIHT  DOWN   L
+- *   05     data   L2     R2     L1    R1   Y     B     A      X
+- *   06     data   右边摇杆  0x00 = 左    0xff = 右
+- *   07     data   右边摇杆  0x00 = 上    0xff = 下
+- *   08     data   左边摇杆  0x00 = 左    0xff = 右
+- *   09     data   左边摇杆  0x00 = 上    0xff = 下
+- *
+- * PB12 -> DATA
+- * PB13 -> CMD
+- * PB14 -> CS
+- * PB15 -> CLK
+- */
+-
+-#include "ps2.h"
+-
+-// --------------------------------DEFINE-------------------------------- 参数定义
+-// PS2手柄的输入输出口
+-#define DI() PBin(12) // 数据输入引脚
+-
+-#define CMD_H() PBout(13) = 1 // 命令位高
+-#define CMD_L() PBout(13) = 0 // 命令位低
+-
+-#define CS_H() PBout(14) = 1 // CS拉高(别名ATT)
+-#define CS_L() PBout(14) = 0 // CS拉低(别名ATT)
+-
+-#define CLK_H() PBout(15) = 1 // 时钟拉高
+-#define CLK_L() PBout(15) = 0 // 时钟拉低
+-
+-// --------------------------------VAULE-------------------------------- 变量定义
+-const uint8_t ps2_cmd[9] = {0x01, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; // 请求获取数据命令
+-static uint8_t ps2_receive[9];                                                     // 接收数据的缓存
+-
+-// --------------------------------FUNCTION-------------------------------- 函数定义
+-// ----------------INIT---------------- PS2初始化
+-void ps2_init(void)
+-{
+-    GPIO_InitTypeDef GPIO_InitStructure;
+-
+-    // GPIO配置
+-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
+-
+-    // DATA 信号从手柄到主机   输入口
+-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_12;
+-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
+-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+-    GPIO_Init(GPIOB, &GPIO_InitStructure);
+-
+-    // COMMMAND 信号从主机到手柄  输出
+-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_13;
+-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+-    GPIO_Init(GPIOB, &GPIO_InitStructure);
+-
+-    // CS 手柄出发信号 信号在通信期间处于低电平
+-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_14;
+-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+-    GPIO_Init(GPIOB, &GPIO_InitStructure);
+-
+-    // CLK 信号从主机到手柄   输出口
+-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_15;
+-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+-    GPIO_Init(GPIOB, &GPIO_InitStructure);
+-
+-    // 关闭PS2手柄使能
+-    CS_H();
+-}
+-
+-// ----------------CONTROL----------------
+-/**
+- * @brief PS2通信
+- *
+- * @param send_data 发送数据
+- * @return uint8_t 接收数据
+- *
+- * @note  通信过程中，先发送数据，再读取数据
+- */
+-uint8_t ps2_comm(uint8_t sendData)
+-{
+-    volatile uint8_t res = 0;
+-    volatile uint8_t ref;
+-
+-    // 写入命令，并读取一个1字节数据
+-    for (ref = 0x01; ref > 0x00; ref <<= 1)
+-    {
+-        ////输出一位数据
+-        if (ref & sendData)
+-            CMD_H();
+-        else
+-            CMD_L();
+-
+-        CLK_L();
+-        delay_us(16);
+-
+-        // 读取一位数据
+-        if (DI())
+-            res |= ref;
+-        CLK_H();
+-        delay_us(16);
+-    }
+-
+-    // 返回读出数据
+-    return res;
+-}
+-
+-// PS2获取按键及摇杆数值
+-void ps2_read(ps2_data *ps2Data)
+-{
+-    uint8_t i;
+-
+-    // 使能手柄
+-    CS_L();
+-
+-    // 读取PS2数据
+-    for (i = 0; i < 9; i++)
+-    {
+-        ps2_receive[i] = ps2_comm(ps2_cmd[i]);
+-    }
+-
+-    // 关闭使能
+-    CS_H();
+-
+-    // 数值传递
+-    ps2Data->mode = ps2_receive[1];
+-    ps2Data->btn1 = ~ps2_receive[3];
+-    ps2Data->btn2 = ~ps2_receive[4];
+-    ps2Data->RJoy_LR = ps2_receive[5];
+-    ps2Data->RJoy_UD = ps2_receive[6];
+-    ps2Data->LJoy_LR = ps2_receive[7];
+-    ps2Data->LJoy_UD = ps2_receive[8];
+-}
++#include "ps2.h"
++#include "delay.h"
++#include "stm32f10x.h"
++
++#define PS2_DATA_PIN  GPIO_Pin_12
++#define PS2_CMD_PIN   GPIO_Pin_13
++#define PS2_CS_PIN    GPIO_Pin_14
++#define PS2_CLK_PIN   GPIO_Pin_15
++#define PS2_HALF_CLOCK_US  16U
++#define PS2_BYTE_GAP_US    16U
++
++/* 用命名引脚和标准库函数代替位带地址宏，便于对应接线。 */
++void ps2_init(void)
++{
++    GPIO_InitTypeDef gpio;
++    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
++    GPIO_StructInit(&gpio);
++    /* 先设置空闲电平，再切换输出模式，避免初始化时误选中接收器。 */
++    GPIO_SetBits(GPIOB, PS2_CMD_PIN | PS2_CS_PIN | PS2_CLK_PIN);
++    gpio.GPIO_Pin = PS2_CMD_PIN | PS2_CS_PIN | PS2_CLK_PIN;
++    gpio.GPIO_Mode = GPIO_Mode_Out_PP;
++    gpio.GPIO_Speed = GPIO_Speed_50MHz;
++    GPIO_Init(GPIOB, &gpio);
++    gpio.GPIO_Pin = PS2_DATA_PIN;
++    gpio.GPIO_Mode = GPIO_Mode_IPU;
++    GPIO_Init(GPIOB, &gpio);
++}
++
++uint8_t ps2_comm(uint8_t send_data)
++{
++    uint8_t bit;
++    uint8_t bit_mask;
++    uint8_t received = 0;
++    /* 固定循环 8 次，低位先传。原来依赖 uint8_t 左移溢出结束循环。 */
++    for (bit = 0; bit < 8; bit++)
++    {
++        bit_mask = (uint8_t)(1U << bit);
++        if ((send_data & bit_mask) != 0)
++        {
++            GPIO_SetBits(GPIOB, PS2_CMD_PIN);
++        }
++        else
++        {
++            GPIO_ResetBits(GPIOB, PS2_CMD_PIN);
++        }
++        GPIO_ResetBits(GPIOB, PS2_CLK_PIN);
++        delay_us(PS2_HALF_CLOCK_US);
++        if (GPIO_ReadInputDataBit(GPIOB, PS2_DATA_PIN) != 0)
++        {
++            received = (uint8_t)(received | bit_mask);
++        }
++        GPIO_SetBits(GPIOB, PS2_CLK_PIN);
++        delay_us(PS2_HALF_CLOCK_US);
++    }
++    return received;
++}
++
++uint8_t ps2_read(ps2_data *data)
++{
++    static const uint8_t request[PS2_FRAME_SIZE] =
++        {0x01, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
++    uint8_t received[PS2_FRAME_SIZE];
++    uint8_t byte;
++    if (data == 0)
++    {
++        return 0;
++    }
++    /* 无效帧也覆盖旧数据，不能让上一次的摇杆/按键继续生效。 */
++    data->mode = 0;
++    data->btn1 = 0;
++    data->btn2 = 0;
++    data->RJoy_LR = 128;
++    data->RJoy_UD = 128;
++    data->LJoy_LR = 128;
++    data->LJoy_UD = 128;
++
++    GPIO_SetBits(GPIOB, PS2_CMD_PIN | PS2_CLK_PIN);
++    GPIO_ResetBits(GPIOB, PS2_CS_PIN);
++    delay_us(PS2_HALF_CLOCK_US);
++    for (byte = 0; byte < PS2_FRAME_SIZE; byte++)
++    {
++        received[byte] = ps2_comm(request[byte]);
++        delay_us(PS2_BYTE_GAP_US);
++    }
++    GPIO_SetBits(GPIOB, PS2_CS_PIN | PS2_CMD_PIN);
++    /* 第 0 字节是空闲响应；检查模式和固定标志，并非校验和。 */
++    if (received[1] != PS2_MODE_ANALOG || received[2] != 0x5AU)
++    {
++        return 0;
++    }
++    data->mode = received[1];
++    data->btn1 = (uint8_t)(~received[3]);
++    data->btn2 = (uint8_t)(~received[4]);
++    data->RJoy_LR = received[5];
++    data->RJoy_UD = received[6];
++    data->LJoy_LR = received[7];
++    data->LJoy_UD = received[8];
++    return 1;
++}
+diff --git a/hardware/Src/pwm.c b/hardware/Src/pwm.c
+index a186bb1..b273daa 100644
+--- a/hardware/Src/pwm.c
++++ b/hardware/Src/pwm.c
+@@ -1,71 +1,73 @@
+ #include "pwm.h"
++#include "stm32f10x.h"
+ 
+-// --------------------------------FUNCTION--------------------------------函数定义
+-// ----------------INIT---------------- pwm初始化
+ void pwm_init(void)
+ {
+-    // TIM时钟初始化
+-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE); // 开启TIM3时钟
+-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
++    GPIO_InitTypeDef gpio;
++    TIM_TimeBaseInitTypeDef timer;
++    TIM_OCInitTypeDef channel;
++    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
++    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB, ENABLE);
++    /* 独占 TIM3。复位确保输出比较寄存器从零开始。 */
++    TIM_DeInit(TIM3);
++    TIM_TimeBaseStructInit(&timer);
++    timer.TIM_ClockDivision = TIM_CKD_DIV1;
++    timer.TIM_CounterMode = TIM_CounterMode_Up;
++    timer.TIM_Period = PWM_PERIOD_COUNTS - 1U;
++    timer.TIM_Prescaler = PWM_PRESCALER_DIV - 1U;
++    TIM_InternalClockConfig(TIM3);
++    TIM_TimeBaseInit(TIM3, &timer);
++    TIM_OCStructInit(&channel);
++    channel.TIM_OCMode = TIM_OCMode_PWM1;
++    channel.TIM_OCPolarity = TIM_OCPolarity_High;
++    channel.TIM_OutputState = TIM_OutputState_Enable;
++    channel.TIM_Pulse = 0;
++    TIM_OC1Init(TIM3, &channel);
++    TIM_OC2Init(TIM3, &channel);
++    TIM_OC3Init(TIM3, &channel);
++    TIM_OC4Init(TIM3, &channel);
+ 
+-    // GPIO时钟初始化
+-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE); // 开启GPIOA时钟
+-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE); // 开启GPIOB时钟
+-
+-    // GPIO配置初始化
+-    GPIO_InitTypeDef GPIO_InitStructure;              // 结构体变量
+-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;   // 复用推挽输出
+-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz; // 输出速度
+-    // 设置GPIOA
+-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7; // 设置端口PA6，PA7
+-    GPIO_Init(GPIOA, &GPIO_InitStructure);                 // GPIOA初始化
+-    // 设置GPIOB
+-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1; // 设置端口PB0,PB1
+-    GPIO_Init(GPIOB, &GPIO_InitStructure);                 // GPIOB初始化
+-
+-    // TIM定时器初始化
+-    TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStructure; // 结构体
+-
+-    TIM_InternalClockConfig(TIM3);                                  // 内部时钟TIM3驱动
+-    TIM_TimeBaseInitStructure.TIM_ClockDivision = TIM_CKD_DIV1;     // 1分频
+-    TIM_TimeBaseInitStructure.TIM_CounterMode = TIM_CounterMode_Up; // 计数器模式 向上计数
+-    TIM_TimeBaseInitStructure.TIM_Period = ARR - 1;                 // ARR 周期 （0~65535）10K频绿下计10000个数 1秒
+-    TIM_TimeBaseInitStructure.TIM_Prescaler = PSC - 1;              // PSC 预分频器 （0~65535）72M进行7200分频（20KHz）
+-    TIM_TimeBaseInitStructure.TIM_RepetitionCounter = 0;            // 重复计数器（高级计数器才有）
+-    TIM_TimeBaseInit(TIM3, &TIM_TimeBaseInitStructure);
+-
+-    // PWM初始化
+-    TIM_OCInitTypeDef TIM_OCInitStructure;                        // 结构体
+-    TIM_OCStructInit(&TIM_OCInitStructure);                       // 结构体赋初始值(防止结构体不完整从而出现奇怪的问题)
+-    TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_PWM1;             // 设置输出比较模式 PWM模式1
+-    TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_High;     // 设置输出比较的极性 高极性
+-    TIM_OCInitStructure.TIM_OutputState = TIM_OutputState_Enable; // 设置输出使能
+-    TIM_OCInitStructure.TIM_Pulse = 0;                            // 初始化设置 CCR 寄存器值
+-    TIM_OC1Init(TIM3, &TIM_OCInitStructure);                      // TIM3通道1初始化完成
+-    TIM_OC2Init(TIM3, &TIM_OCInitStructure);                      // TIM3通道2初始化完成
+-    TIM_OC3Init(TIM3, &TIM_OCInitStructure);                      // TIM3通道3初始化完成
+-    TIM_OC4Init(TIM3, &TIM_OCInitStructure);                      // TIM3通道4初始化完成
+-
+-    // 定时器赋能
+-    TIM_Cmd(TIM3, ENABLE); // 定时器开始工作
++    /* TODO_DRV8833：保留旧 EN 引脚，未来重配定时器通道。
++     * TIM3_CH1=PA6，CH2=PA7，CH3=PB0，CH4=PB1。
++     */
++    GPIO_StructInit(&gpio);
++    gpio.GPIO_Mode = GPIO_Mode_AF_PP;
++    gpio.GPIO_Speed = GPIO_Speed_50MHz;
++    gpio.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7;
++    GPIO_Init(GPIOA, &gpio);
++    gpio.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;
++    GPIO_Init(GPIOB, &gpio);
++    /* 保留 CCR 直接更新，零输出不等待下一个 20 ms 周期。
++     * 未来若启用 CCR 预装载，必须同时重做立即停车/换向时序。
++     */
++    TIM_Cmd(TIM3, ENABLE);
+ }
+ 
+-// ----------------CONTROL---------------- 底盘的PWM设置
+-// 占空比(0, 1)
+-// 电机*4
+-void pwm_set1(float duty)
++static uint16_t duty_to_compare(float duty)
+ {
+-    TIM_SetCompare1(TIM3, (uint16_t)(duty * ARR - 1));
++    if (!(duty > 0.0f))
++    {
++        return 0; /* 0、负值、NaN；绝不能对零占空比再减 1。 */
++    }
++    if (duty >= 1.0f)
++    {
++        return PWM_PERIOD_COUNTS;
++    }
++    /* PWM1 向上计数：CNT < CCR 时高电平。
++     * ARR=19999，共20000个计数；CCR=0 -> 0%，CCR=20000 -> 100%。
++     */
++    return (uint16_t)(duty * PWM_PERIOD_COUNTS);
+ }
+-void pwm_set2(float duty)
+-{
+-    TIM_SetCompare2(TIM3, (uint16_t)(duty * ARR - 1));
+-}
+-void pwm_set3(float duty)
+-{
+-    TIM_SetCompare3(TIM3, (uint16_t)(duty * ARR - 1));
+-}
+-void pwm_set4(float duty)
++
++void pwm_set1(float duty) { TIM_SetCompare1(TIM3, duty_to_compare(duty)); }
++void pwm_set2(float duty) { TIM_SetCompare2(TIM3, duty_to_compare(duty)); }
++void pwm_set3(float duty) { TIM_SetCompare3(TIM3, duty_to_compare(duty)); }
++void pwm_set4(float duty) { TIM_SetCompare4(TIM3, duty_to_compare(duty)); }
++
++void pwm_stop_all(void)
+ {
+-    TIM_SetCompare4(TIM3, (uint16_t)(duty * ARR - 1));
++    TIM_SetCompare1(TIM3, 0);
++    TIM_SetCompare2(TIM3, 0);
++    TIM_SetCompare3(TIM3, 0);
++    TIM_SetCompare4(TIM3, 0);
+ }
+diff --git a/user/rmcic.uvprojx b/user/rmcic.uvprojx
+index bd50799..5882deb 100644
+--- a/user/rmcic.uvprojx
++++ b/user/rmcic.uvprojx
+@@ -18,7 +18,7 @@
+           <Vendor>STMicroelectronics</Vendor>
+           <PackID>Keil.STM32F1xx_DFP.2.3.0</PackID>
+           <PackURL>http://www.keil.com/pack/</PackURL>
+-          <Cpu>IRAM(0x20000000,0x00005000) IROM(0x08000000,0x00010000) CPUTYPE("Cortex-M3") CLOCK(12000000) ELITTLE</Cpu>
++          <Cpu>IRAM(0x20000000,0x00005000) IROM(0x08000000,0x00010000) CPUTYPE("Cortex-M3") CLOCK(8000000) ELITTLE</Cpu>
+           <FlashUtilSpec></FlashUtilSpec>
+           <StartupFile></StartupFile>
+           <FlashDriverDll>UL2CM3(-S0 -C0 -P0 -FD20000000 -FC1000 -FN1 -FF0STM32F10x_128 -FS08000000 -FL020000 -FP0($$Device:STM32F103C8$Flash\STM32F10x_128.FLM))</FlashDriverDll>
+@@ -339,7 +339,7 @@
+               <MiscControls></MiscControls>
+               <Define>STM32F10X_MD,USE_STDPERIPH_DRIVER</Define>
+               <Undefine></Undefine>
+-              <IncludePath>..\hardware;..\hardware\Inc;..\lib;..\lib\hal;..\lib\fwlib\inc;..\lib\cmsis</IncludePath>
++              <IncludePath>..\hardware\Inc;..\lib\fwlib\inc;..\lib\cmsis</IncludePath>
+             </VariousControls>
+           </Cads>
+           <Aads>

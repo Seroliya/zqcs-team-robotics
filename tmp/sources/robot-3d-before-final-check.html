@@ -1,0 +1,238 @@
+<div id="crtc-robot-3d">
+  <div class="viz-row" aria-label="结构视图">
+    <button class="btn" type="button" data-view="whole" aria-pressed="true">整车</button>
+    <button class="btn" type="button" data-view="feeder" aria-pressed="false">分料斗特写</button>
+    <button class="btn" type="button" data-view="explode" aria-pressed="false">结构分层</button>
+  </div>
+  <div class="viz-controls">
+    <label class="form-label">轮组外宽
+      <select class="form-select" id="crtc3-width"><option value="135">窄轮组 135 mm</option><option value="185">宽轮组 185 mm</option></select>
+    </label>
+    <label class="form-label">翻转臂姿态
+      <select class="form-select" id="crtc3-pose"><option value="feed">投料</option><option value="stow">收纳</option><option value="pick">地面夹取</option></select>
+    </label>
+  </div>
+  <div class="crtc3-stage" role="group" aria-label="可拖动旋转的机器人三维结构，支持视角按钮和缩放按钮">
+    <div class="crtc3-canvas"></div>
+    <svg class="crtc3-labels" role="img" aria-label="机器人部件标注"></svg>
+  </div>
+  <div class="viz-row" aria-label="相机角度">
+    <button class="btn btn-ghost" type="button" data-camera="iso">立体</button>
+    <button class="btn btn-ghost" type="button" data-camera="top">俯视</button>
+    <button class="btn btn-ghost" type="button" data-camera="side">侧视</button>
+    <button class="btn btn-ghost" type="button" id="crtc3-zoom-in" aria-label="放大模型">放大</button>
+    <button class="btn btn-ghost" type="button" id="crtc3-zoom-out" aria-label="缩小模型">缩小</button>
+  </div>
+  <div class="viz-controls">
+    <label class="form-label">分料出口
+      <select class="form-select" id="crtc3-lane"><option value="-1">左道</option><option value="0" selected>中道</option><option value="1">右道</option></select>
+    </label>
+    <button class="btn btn-primary" id="crtc3-play" type="button">演示一次装料</button>
+  </div>
+  <div id="crtc3-state" class="text-small" aria-live="polite">三维结构加载中</div>
+  <div class="text-small text-muted">概念装配 · 非加工图 · 方块运动为预设轨迹</div>
+</div>
+<style>
+  #crtc-robot-3d .crtc3-stage{position:relative; height:470px; touch-action:pan-y;}
+  #crtc-robot-3d .crtc3-canvas{position:absolute; inset:0;}
+  #crtc-robot-3d .crtc3-canvas canvas{display:block; width:100%; height:100%; touch-action:none; cursor:grab;}
+  #crtc-robot-3d .crtc3-canvas canvas:active{cursor:grabbing;}
+  #crtc-robot-3d .crtc3-labels{position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:hidden;}
+  #crtc-robot-3d .crtc3-labels text{font-size:12px; fill:var(--foreground);}
+  #crtc-robot-3d .crtc3-labels line{stroke:var(--muted-foreground); stroke-width:1; opacity:.75;}
+  #crtc-robot-3d .crtc3-labels circle{fill:var(--foreground);}
+  @media(max-width:480px){#crtc-robot-3d .crtc3-stage{height:390px;}}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  const root=document.getElementById('crtc-robot-3d');
+  const stage=root.querySelector('.crtc3-stage'),host=root.querySelector('.crtc3-canvas'),labels=root.querySelector('.crtc3-labels');
+  const stateEl=root.querySelector('#crtc3-state'),widthEl=root.querySelector('#crtc3-width'),poseEl=root.querySelector('#crtc3-pose'),laneEl=root.querySelector('#crtc3-lane'),playEl=root.querySelector('#crtc3-play');
+  let attempts=0;
+  function boot(){
+    if(!window.THREE){if(attempts++<60){setTimeout(boot,150);return;}stateEl.textContent='三维库未能加载';return;}
+    const T=window.THREE;
+    let renderer;
+    try{renderer=new T.WebGLRenderer({antialias:true,alpha:true,preserveDrawingBuffer:true});}
+    catch(e){stateEl.textContent='当前环境无法启用三维绘制';root.dataset.error=e.message;return;}
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+    renderer.outputEncoding=T.sRGBEncoding;
+    host.appendChild(renderer.domElement);
+    renderer.domElement.setAttribute('role','img');
+    renderer.domElement.setAttribute('aria-label','四轮机器人，低位电池，双侧翻转臂和夹爪，上方固定接料斗与可转动导流槽，后方三道敞口料仓');
+    const scene=new T.Scene(),camera=new T.OrthographicCamera(-240,240,200,-200,.1,3000);
+    scene.add(new T.HemisphereLight(0xffffff,0x888888,.95));
+    const light=new T.DirectionalLight(0xffffff,.85);light.position.set(150,500,250);scene.add(light);
+    const fillLight=new T.DirectionalLight(0xffffff,.35);fillLight.position.set(-300,120,-250);scene.add(fillLight);
+    const probe=document.createElement('span');probe.setAttribute('aria-hidden','true');root.appendChild(probe);
+    const colorCanvas=document.createElement('canvas');colorCanvas.width=colorCanvas.height=1;const colorContext=colorCanvas.getContext('2d');
+    function token(name){probe.style.color=`var(${name})`;colorContext.clearRect(0,0,1,1);colorContext.fillStyle=getComputedStyle(probe).color;colorContext.fillRect(0,0,1,1);const d=colorContext.getImageData(0,0,1,1).data;return new T.Color(d[0]/255,d[1]/255,d[2]/255).convertSRGBToLinear();}
+    const mats={},definitions={frame:'--muted',metal:'--foreground',arm:'--viz-series-1',bin:'--viz-series-2',feeder:'--viz-series-3',electronics:'--viz-series-4',block:'--viz-series-5',motor:'--viz-series-6',wheel:'--muted-foreground',rubber:'--foreground',wire:'--viz-series-3'};
+    for(const [key,name] of Object.entries(definitions))mats[key]=new T.MeshStandardMaterial({color:token(name),roughness:.73,metalness:key==='metal'?.45:.08,side:T.DoubleSide});
+    mats.frame.color.lerp(token('--background'),.25);mats.metal.color.lerp(token('--background'),.4);mats.rubber.color.lerp(token('--background'),.15);
+    const edgeMat=new T.LineBasicMaterial({color:token('--muted-foreground'),transparent:true,opacity:.38});
+    const railMat=new T.LineBasicMaterial({color:token('--border'),transparent:true,opacity:.65});
+    function finish(mesh,parent,edge=false){parent.add(mesh);if(edge){const e=new T.LineSegments(new T.EdgesGeometry(mesh.geometry,25),edgeMat);mesh.add(e);}return mesh;}
+    function box(parent,x,y,z,a,b,c,material,edge=false){const mesh=new T.Mesh(new T.BoxGeometry(a,b,c),material);mesh.position.set(x,y,z);return finish(mesh,parent,edge);}
+    function cyl(parent,x,y,z,r,length,material,axis='y',segments=16){const m=new T.Mesh(new T.CylinderGeometry(r,r,length,segments),material);if(axis==='z')m.rotation.x=Math.PI/2;if(axis==='x')m.rotation.z=Math.PI/2;m.position.set(x,y,z);return finish(m,parent);}
+    function rod(parent,a,b,r,material){const A=new T.Vector3(...a),B=new T.Vector3(...b),d=B.clone().sub(A);const m=new T.Mesh(new T.CylinderGeometry(r,r,d.length(),10),material);m.position.copy(A.add(B).multiplyScalar(.5));m.quaternion.setFromUnitVectors(new T.Vector3(0,1,0),d.normalize());return finish(m,parent);}
+    function bar(parent,a,b,width,depth,material){const A=new T.Vector3(...a),B=new T.Vector3(...b),d=B.clone().sub(A);const m=new T.Mesh(new T.BoxGeometry(width,d.length(),depth),material);m.position.copy(A.add(B).multiplyScalar(.5));m.quaternion.setFromUnitVectors(new T.Vector3(0,1,0),d.normalize());return finish(m,parent,true);}
+    function quad(parent,points,material){const g=new T.BufferGeometry(),p=[];for(const i of [0,1,2,0,2,3])p.push(...points[i]);g.setAttribute('position',new T.Float32BufferAttribute(p,3));g.computeVertexNormals();return finish(new T.Mesh(g,material),parent,true);}
+    const base=new T.Group(),electric=new T.Group(),bin=new T.Group(),feeder=new T.Group(),arm=new T.Group(),payload=new T.Group();
+    for(const g of [base,electric,bin,feeder,arm,payload])scene.add(g);
+    const wheelGroups=[],motorGroups=[];
+    box(base,0,27,0,250,5,48,mats.frame,true);
+    for(const x of [-32,32])box(base,x,29,0,9,5,172,mats.frame,true);
+    for(const z of [-76,76])box(base,0,32,z,85,5,9,mats.frame,true);
+    box(base,116,33,0,12,8,120,mats.frame,true);
+    box(base,-116,31,0,10,6,75,mats.frame,true);
+    for(const x of [-82.5,82.5])for(const side of [-1,1]){
+      const wg=new T.Group();wg.position.set(x,30,0);base.add(wg);wheelGroups.push({g:wg,side});
+      cyl(wg,0,0,0,22,21,mats.motor,'z',24);cyl(wg,0,0,side*11,12,4,mats.frame,'z');
+      for(let j=0;j<9;j++){
+        const a=j*Math.PI*2/9,r=23,roller=new T.Mesh(new T.CylinderGeometry(6,6,25,10),mats.wheel);
+        roller.position.set(Math.cos(a)*r,Math.sin(a)*r,0);
+        const tangent=new T.Vector3(-Math.sin(a),Math.cos(a),((x>0?1:-1)*side)).normalize();
+        roller.quaternion.setFromUnitVectors(new T.Vector3(0,1,0),tangent);wg.add(roller);
+      }
+      const mg=new T.Group();mg.position.set(x+(x>0?-10:10),32,0);base.add(mg);motorGroups.push({g:mg,side});
+      box(mg,0,0,0,52,18,20,mats.motor,true);cyl(mg,x>0?-20:20,0,0,8,22,mats.metal,'x');
+      cyl(mg,x>0?10:-10,0,side*13,3,12,mats.metal,'z');
+    }
+    for(const z of [-76,76]){
+      bar(base,[27,33,z],[27,84,z],7,7,mats.frame);
+      bar(base,[27,84,z],[75,85,z],8,8,mats.frame);
+      bar(base,[27,33,z],[75,85,z],6,6,mats.frame);
+      cyl(base,75,85,z,10,9,mats.metal,'z');
+      box(base,101,53,z,13,13,10,mats.frame,true);
+    }
+    box(base,75,85,0,5,5,141,mats.metal);
+    box(base,55,91,50,41,38,20,mats.arm,true);
+    cyl(base,75,85,64,6,19,mats.metal,'z');
+    box(electric,0,32,0,78,4,46,mats.frame,true);
+    for(const z of [-11,11]){cyl(electric,0,44,z,9.3,65,mats.electronics,'x',24);cyl(electric,33,44,z,5,2,mats.metal,'x');}
+    for(const x of [-25,25])box(electric,x,55,0,7,2,45,mats.rubber);
+    box(electric,87,61,0,55,2,30,mats.electronics,true);
+    box(electric,88,65,0,10,4,10,mats.metal);
+    for(const z of [-14,14])for(let i=0;i<12;i++)box(electric,65+i*4,65,z,2,5,2,mats.metal);
+    for(const x of [-24,9,42]){
+      box(electric,x,62,-30,25,2,21,mats.electronics,true);cyl(electric,x,66,-30,5,6,mats.metal);box(electric,x-7,66,-24,5,5,5,mats.motor);
+    }
+    box(electric,101,74,-45,28,16,18,mats.electronics,true);
+    for(const z of [-38,38])box(electric,-4,60,z,23,2,17,mats.electronics,true);
+    for(const z of [-15,15])rod(electric,[35,47,z],[67,61,z],.9,mats.wire);
+    const slope=Math.tan(20*Math.PI/180),floorY=x=>68+(x+110)*slope;
+    function slopePlate(z1,z2,h){return quad(bin,[[-110,floorY(-110)+h,z1],[25,floorY(25)+h,z1],[25,floorY(25)+h,z2],[-110,floorY(-110)+h,z2]],mats.bin);}
+    slopePlate(-71,71,0);
+    for(const z of [-71,71])quad(bin,[[-110,floorY(-110),z],[25,floorY(25),z],[25,floorY(25)+45,z],[-110,floorY(-110)+45,z]],mats.bin);
+    for(const z of [-23,23])quad(bin,[[-110,floorY(-110),z],[25,floorY(25),z],[25,floorY(25)+22,z],[-110,floorY(-110)+22,z]],mats.bin);
+    box(bin,-112,90.5,0,3,45,142,mats.bin,true);
+    box(bin,26,123.2,0,3,12,142,mats.bin,true);
+    for(const x of [-99,18])for(const z of [-68,68])bar(bin,[x,34,z],[x,floorY(x),z],5,5,mats.frame);
+    function hollowBlock(parent,x,y,z){const g=new T.Group();g.position.set(x,y,z);parent.add(g);for(const a of [-15,15])for(const b of [-15,15]){
+      box(g,0,a,b,40,10,10,mats.block);box(g,a,0,b,10,40,10,mats.block);box(g,a,b,0,10,10,40,mats.block);
+    }return g;}
+    for(const z of [-46,0,46]){const block=hollowBlock(bin,-86,floorY(-86)+20,z);block.rotation.z=20*Math.PI/180;}
+    const funnelTop=190,funnelBottom=164,fx=60,topHalf=34,bottomHalf=23;
+    for(const side of [-1,1]){
+      quad(feeder,[[fx-topHalf,funnelTop,side*topHalf],[fx+topHalf,funnelTop,side*topHalf],[fx+bottomHalf,funnelBottom,side*bottomHalf],[fx-bottomHalf,funnelBottom,side*bottomHalf]],mats.feeder);
+      quad(feeder,[[fx+side*topHalf,funnelTop,-topHalf],[fx+side*topHalf,funnelTop,topHalf],[fx+side*bottomHalf,funnelBottom,bottomHalf],[fx+side*bottomHalf,funnelBottom,-bottomHalf]],mats.feeder);
+    }
+    for(const z of [-61,61]){bar(feeder,[15,117,z],[63,168,z],4,4,mats.frame);bar(feeder,[63,168,z],[60,163,z>0?25:-25],4,4,mats.frame);}
+    const bearing=new T.Mesh(new T.TorusGeometry(34,3,10,40),mats.metal);bearing.rotation.x=Math.PI/2;bearing.position.set(60,160,0);feeder.add(bearing);
+    const chute=new T.Group();chute.position.set(60,160,0);feeder.add(chute);
+    const length=68,endY=-22;
+    quad(chute,[[13,0,-24],[13,0,24],[-length,endY,24],[-length,endY,-24]],mats.feeder);
+    for(const z of [-24,24])quad(chute,[[13,0,z],[-length,endY,z],[-length,endY+17,z],[13,17,z]],mats.feeder);
+    const ringGear=new T.Mesh(new T.TorusGeometry(33,2,8,40),mats.feeder);ringGear.rotation.x=Math.PI/2;ringGear.position.y=-7;chute.add(ringGear);
+    for(let k=0;k<24;k++){const a=k*Math.PI/12,tooth=box(chute,35*Math.cos(a),-7,35*Math.sin(a),5,4,5,mats.feeder);tooth.rotation.y=-a;}
+    box(feeder,113,136,0,23,25,13,mats.electronics,true);
+    const pinion=new T.Group();pinion.position.set(104,153,0);feeder.add(pinion);cyl(pinion,0,0,0,8,4,mats.metal);
+    for(let k=0;k<12;k++){const a=k*Math.PI/6;box(pinion,8*Math.cos(a),0,8*Math.sin(a),3,4,3,mats.metal);}
+    const direction=new T.Group();feeder.add(direction);
+    const armLinks=[],tipLinks=[],cross=new T.Group(),gripper=new T.Group();arm.add(cross);arm.add(gripper);
+    for(const z of [-76,76])for(const dy of [-10,10]){
+      const mesh=bar(arm,[75,85+dy,z],[255,85+dy,z],dy>0?9:4,dy>0?6:4,dy>0?mats.arm:mats.metal);armLinks.push({mesh,z,dy});
+    }
+    for(const z of [-76,76]){const g=new T.Group();cross.add(g);box(g,0,0,z,9,30,7,mats.arm,true);for(const dy of [-10,10])cyl(g,0,dy,z,5,8,mats.metal,'z');}
+    box(cross,0,17,0,9,6,152,mats.arm,true);
+    bar(cross,[0,17,-32],[0,30,-18],5,5,mats.arm);bar(cross,[0,17,32],[0,30,18],5,5,mats.arm);
+    box(gripper,-19,29,0,23,20,13,mats.electronics,true);box(gripper,0,24,0,25,5,62,mats.arm,true);
+    const jaws=[];
+    for(const side of [-1,1]){const j=new T.Group();gripper.add(j);jaws.push({g:j,side});box(j,4,1,0,30,30,4,mats.arm,true);box(j,4,-15,-side*2,29,3,7,mats.arm,true);box(j,4,0,-side*2.5,24,21,1.5,mats.rubber);}
+    const activeBlock=hollowBlock(payload,0,20,0);activeBlock.visible=false;
+    const grid=new T.GridHelper(460,23,token('--border'),token('--border'));grid.material.transparent=true;grid.material.opacity=.27;grid.position.y=-1;scene.add(grid);
+    const dims=new T.Group();scene.add(dims);
+    const dimensionGeometry=new T.BufferGeometry().setFromPoints([new T.Vector3(-125,1,-110),new T.Vector3(125,1,-110),new T.Vector3(125,1,-114),new T.Vector3(125,1,-106),new T.Vector3(-125,1,-106),new T.Vector3(-125,1,-114)]);
+    dims.add(new T.Line(dimensionGeometry,railMat));
+    let view='whole',yaw=.78,pitch=.58,zoom=1,angle=94.78,selectedLane=0,running=false,currentPhase='',animationStart=0;
+    const pickup=Math.asin((20-85)/180)*180/Math.PI,release=Math.acos((60-75)/180)*180/Math.PI;
+    let width=700,height=470,initialCamera='iso',requestId=0,removed=false;
+    const target=new T.Vector3(27,125,0),smooth=u=>u*u*(3-2*u),mix=(a,b,u)=>a+(b-a)*u;
+    function armPoint(deg){const a=deg*Math.PI/180;return new T.Vector3(75+180*Math.cos(a),85+180*Math.sin(a),0);}
+    function updateArm(deg,opening=26){angle=deg;const p=armPoint(deg);for(const q of armLinks){const A=new T.Vector3(75,85+q.dy,q.z),B=new T.Vector3(p.x,p.y+q.dy,q.z),d=B.clone().sub(A);q.mesh.position.copy(A.add(B).multiplyScalar(.5));q.mesh.quaternion.setFromUnitVectors(new T.Vector3(0,1,0),d.normalize());}cross.position.copy(p);gripper.position.copy(p);for(const q of jaws)q.g.position.z=q.side*opening;return p;}
+    function setWheelWidth(){const outer=Number(widthEl.value);for(const q of wheelGroups)q.g.position.z=q.side*(outer-30)/2;for(const q of motorGroups)q.g.position.z=q.side*((outer-30)/2-30);root.dataset.wheelWidth=outer;}
+    function setChute(){const a=selectedLane*Math.asin(46/68);chute.rotation.y=a;pinion.rotation.y=-a*34/8;direction.clear();const z=68*Math.sin(a),x=60-68*Math.cos(a);const arrow=new T.ArrowHelper(new T.Vector3(-1,0,0),new T.Vector3(x,147,z),26,mats.feeder.color,7,4);direction.add(arrow);root.dataset.lane=selectedLane;}
+    function poseAngle(){return poseEl.value==='pick'?pickup:poseEl.value==='stow'?158:release;}
+    function setLayers(){const split=view==='explode';base.position.y=0;electric.position.y=split?35:0;bin.position.y=split?92:0;feeder.position.y=split?160:0;arm.position.y=split?73:0;payload.position.y=0;const focus=view==='feeder';base.visible=!focus;electric.visible=!focus;arm.visible=!focus;grid.visible=!focus;dims.visible=!focus;playEl.disabled=split;poseEl.disabled=focus||running;}
+    function setView(newView){if(running)return;view=newView;for(const b of root.querySelectorAll('[data-view]'))b.setAttribute('aria-pressed',String(b.dataset.view===view));activeBlock.visible=false;setLayers();zoom=1;yaw=view==='feeder'?-.65:.78;pitch=view==='feeder'?.7:.58;initialCamera='iso';stateEl.textContent=view==='feeder'?'固定接料斗 → 可转导流槽 → 三条敞口料道':view==='explode'?'零件已分层拉开，间距仅用于观察内部结构':'拖动旋转 · 双侧翻转臂、低位电池、敞口分道料仓';root.dataset.view=view;render();}
+    function cameraState(){const focus=view==='feeder',split=view==='explode';target.set(focus?-12:angle<0?58:15,split?203:focus?137:136,0);const distance=800;camera.position.set(target.x+distance*Math.cos(pitch)*Math.cos(yaw),target.y+distance*Math.sin(pitch),target.z+distance*Math.cos(pitch)*Math.sin(yaw));camera.up.set(0,1,0);camera.lookAt(target);const aspect=width/height;let vertical=focus?242:split?480:386;if(width<480)vertical=focus?315:split?585:505;vertical/=zoom;camera.top=vertical/2;camera.bottom=-vertical/2;camera.left=-vertical*aspect/2;camera.right=vertical*aspect/2;camera.updateProjectionMatrix();camera.updateMatrixWorld();}
+    function svgEl(tag,attrs,text){const e=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v]of Object.entries(attrs))e.setAttribute(k,String(v));if(text!==undefined)e.textContent=text;labels.appendChild(e);return e;}
+    function labelData(){if(view==='feeder')return[
+      {name:'固定接料斗',p:[87,181,23],side:1},
+      {name:'回转支承',p:[77,160,17],side:1},
+      {name:'分料 SG90',p:[113,137,0],side:1},
+      {name:'转动导流槽',p:[28,150,selectedLane*23],side:-1},
+      {name:'前缘挡边',p:[25,129,-48],side:-1},
+      {name:'敞口料道 ×3',p:[-67,100,49],side:-1}
+    ];const p=armPoint(angle);return[
+      {name:'翻转臂＋夹爪',p:[p.x,p.y+24,0],side:-1},
+      {name:'分料斗',p:[65,182+feeder.position.y,24],side:1},
+      {name:'敞口料仓',p:[-72,115+bin.position.y,69],side:1},
+      {name:'低位电池',p:[0,51+electric.position.y,10],side:-1},
+      {name:'四轮独立驱动',p:[82,30,(Number(widthEl.value)-30)/2],side:1},
+      {name:'臂根承力支架',p:[59,84,76],side:-1}
+    ].map(q=>q.name==='翻转臂＋夹爪'?{...q,p:[q.p[0],q.p[1]+arm.position.y,q.p[2]]}:q);}
+    function updateLabels(){labels.replaceChildren();labels.setAttribute('viewBox',`0 0 ${width} ${height}`);let items=labelData();if(width<480)items=items.filter(q=>view==='feeder'?['固定接料斗','转动导流槽','敞口料道 ×3'].includes(q.name):['翻转臂＋夹爪','分料斗','敞口料仓'].includes(q.name));const groups={1:[],'-1':[]};for(const it of items){const p=new T.Vector3(...it.p).project(camera),x=(p.x+1)*width/2,y=(1-p.y)*height/2;if(x<0||x>width||y<0||y>height)continue;groups[it.side].push({...it,x,y});}for(const side of [-1,1]){const group=groups[side].sort((a,b)=>a.y-b.y);let last=10;for(let i=0;i<group.length;i++){const q=group[i],ly=Math.min(height-15-(group.length-1-i)*25,Math.max(q.y,25,last+26)),tx=side<0?8:width-8,edge=side<0?90:width-90;last=ly;svgEl('line',{x1:q.x,y1:q.y,x2:edge,y2:ly-4});svgEl('circle',{cx:q.x,cy:q.y,r:2.4});svgEl('text',{x:tx,y:ly,'text-anchor':side<0?'start':'end'},q.name);}}}
+    function render(){if(removed)return;cameraState();renderer.render(scene,camera);updateLabels();root.dataset.ready='true';root.dataset.armAngle=angle.toFixed(2);}
+    function resize(){width=stage.clientWidth;height=stage.clientHeight;renderer.setSize(width,height,false);render();}
+    function setPhase(phase){if(currentPhase===phase)return;currentPhase=phase;stateEl.textContent=phase;root.dataset.phase=phase;}
+    function blockPosition(p,tilt=0){activeBlock.position.copy(p);activeBlock.rotation.set(0,0,tilt);}
+    function disabled(on){widthEl.disabled=on;laneEl.disabled=on;poseEl.disabled=on||view==='feeder';for(const b of root.querySelectorAll('[data-view]'))b.disabled=on;playEl.disabled=on||view==='explode';}
+    function frame(now){if(!running)return;const time=(now-animationStart)/1000,offset=view==='feeder'?3.8:0,t=time+offset;activeBlock.visible=true;const a=selectedLane*Math.asin(46/68),out=new T.Vector3(60-68*Math.cos(a),158,68*Math.sin(a));
+      if(t<.9){setPhase('① 翻转臂下降，对准地面方块');updateArm(mix(release,pickup,smooth(t/.9)),28);blockPosition(armPoint(pickup));}
+      else if(t<1.3){setPhase('② 夹爪闭合，接触方块框边');updateArm(pickup,mix(28,22,smooth((t-.9)/.4)));blockPosition(armPoint(pickup));}
+      else if(t<3.4){setPhase('③ 翻转臂抬升，夹爪姿态由连杆保持');const p=updateArm(mix(pickup,release,smooth((t-1.3)/2.1)),22);blockPosition(p);}
+      else if(t<3.8){setPhase('④ 对准接料斗，夹爪松开');updateArm(release,mix(22,28,(t-3.4)/.4));blockPosition(armPoint(release));}
+      else if(t<4.5){setPhase('⑤ 方块进入固定接料斗');updateArm(release,28);const p=armPoint(release).lerp(new T.Vector3(60,184,0),smooth((t-3.8)/.7));blockPosition(p);}
+      else if(t<5.5){setPhase('⑥ 导流槽送向'+(selectedLane<0?'左':selectedLane>0?'右':'中')+'道');const u=smooth((t-4.5));blockPosition(new T.Vector3(60,184,0).lerp(out,u),0);}
+      else if(t<6.1){setPhase('⑦ 方块落入敞口料道');const u=smooth((t-5.5)/.6),end=new T.Vector3(out.x,floorY(out.x)+21,selectedLane*46);blockPosition(out.clone().lerp(end,u),u*20*Math.PI/180);}
+      else if(t<7.4){setPhase('⑧ 沿料道滑到已有方块后方');const u=smooth((t-6.1)/1.3),x=mix(out.x,-41,u);blockPosition(new T.Vector3(x,floorY(x)+21,selectedLane*46),20*Math.PI/180);}
+      else{running=false;disabled(false);setPhase('单块演示完成 · 分料轨迹仍需样件验证');root.dataset.animationComplete='true';}
+      render();if(running)requestId=requestAnimationFrame(frame);
+    }
+    function play(){if(running||view==='explode')return;activeBlock.visible=true;root.dataset.animationComplete='false';currentPhase='';poseEl.value='feed';setChute();running=true;disabled(true);if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){updateArm(release,28);blockPosition(new T.Vector3(-41,floorY(-41)+21,selectedLane*46),20*Math.PI/180);running=false;disabled(false);setPhase('方块落入所选料道 · 已按减少动态效果偏好显示终态');root.dataset.animationComplete='true';render();return;}animationStart=performance.now();requestId=requestAnimationFrame(frame);}
+    root.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
+    widthEl.addEventListener('change',()=>{setWheelWidth();render();});
+    poseEl.addEventListener('change',()=>{activeBlock.visible=false;updateArm(poseAngle(),26);render();});
+    laneEl.addEventListener('change',()=>{selectedLane=Number(laneEl.value);activeBlock.visible=false;setChute();stateEl.textContent=(selectedLane<0?'左':selectedLane>0?'右':'中')+'道已对准 · 切换时导流槽内为空';render();});
+    playEl.addEventListener('click',play);
+    root.querySelectorAll('[data-camera]').forEach(b=>b.addEventListener('click',()=>{initialCamera=b.dataset.camera;if(initialCamera==='top'){pitch=1.53;yaw=0;}else if(initialCamera==='side'){pitch=.04;yaw=Math.PI/2;}else{pitch=.58;yaw=view==='feeder'?-.65:.78;}zoom=1;render();}));
+    root.querySelector('#crtc3-zoom-in').addEventListener('click',()=>{zoom=Math.min(2.3,zoom*1.15);render();});
+    root.querySelector('#crtc3-zoom-out').addEventListener('click',()=>{zoom=Math.max(.6,zoom/1.15);render();});
+    let drag=null;
+    renderer.domElement.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};renderer.domElement.setPointerCapture(e.pointerId);});
+    renderer.domElement.addEventListener('pointermove',e=>{if(!drag)return;yaw-=(e.clientX-drag.x)*.008;pitch=Math.max(.03,Math.min(1.53,pitch+(e.clientY-drag.y)*.007));drag={x:e.clientX,y:e.clientY};render();});
+    for(const name of ['pointerup','pointercancel'])renderer.domElement.addEventListener(name,()=>{drag=null;});
+    renderer.domElement.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(2.3,zoom*Math.exp(-e.deltaY*.001)));render();},{passive:false});
+    const themeObserver=new MutationObserver(()=>{for(const [key,name] of Object.entries(definitions))mats[key].color.copy(token(name));mats.frame.color.lerp(token('--background'),.25);mats.metal.color.lerp(token('--background'),.4);mats.rubber.color.lerp(token('--background'),.15);edgeMat.color.copy(token('--muted-foreground'));render();});
+    themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['class','style','data-theme']});
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{for(const [key,name]of Object.entries(definitions))mats[key].color.copy(token(name));render();});
+    const resizeObserver=new ResizeObserver(resize);resizeObserver.observe(stage);
+    setWheelWidth();updateArm(release,26);setChute();setLayers();resize();setView('whole');
+    root.dataset.meshes=String(scene.children.reduce((n,g)=>{g.traverse(q=>{if(q.isMesh)n++;});return n;},0));
+  }
+  boot();
+})();
+</script>

@@ -1,0 +1,6 @@
+user/Objects/
+user/Listings/
+user/*.uvguix.*
+user/*.uvoptx
+__pycache__/
+*.pyc
