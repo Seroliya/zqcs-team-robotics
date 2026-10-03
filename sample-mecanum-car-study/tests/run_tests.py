@@ -18,7 +18,7 @@ flags = [CC, "-std=c99", "-Wall", "-Wextra", "-Werror",
 # 使用真实的 STM32 头文件，检查所有应用源文件。
 sources = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "hardware/Src").glob("*.c"))
 subprocess.run(flags + ["-fsyntax-only"] + sources, check=True)
-print("PASS: all 6 application C files, real STM32 headers, warnings as errors", flush=True)
+print(f"PASS: all {len(sources)} application C files, real STM32 headers, warnings as errors", flush=True)
 
 project = ET.parse("user/rmcic.uvprojx")
 for node in project.findall(".//FilePath"):
@@ -37,6 +37,8 @@ with tempfile.TemporaryDirectory(prefix="mecanum-tests-") as temp:
         extra = ["-fsanitize=undefined,float-cast-overflow", "-fno-sanitize-recover=all"]
     subprocess.run(flags + extra + ["-Itests", "tests/test_control.c",
                    "tests/mock_hardware.c", "hardware/Src/ps2.c",
+                   "tests/mock_calibration_flash.c", "hardware/Src/calibration_store.c",
+                   "hardware/Src/calibration_control.c",
                    "hardware/Src/motor.c", "hardware/Src/pwm.c", "-lm", "-o", exe],
                    check=True)
     subprocess.run([exe], check=True)
@@ -45,3 +47,35 @@ with tempfile.TemporaryDirectory(prefix="mecanum-tests-") as temp:
                    "tests/mock_hardware.c", "hardware/Src/ps2.c", "hardware/Src/pwm.c",
                    "-o", button_exe], check=True)
     subprocess.run([button_exe], check=True)
+    tuning_exe = str(Path(temp) / ("test_motor_tuning.exe" if os.name == "nt" else "test_motor_tuning"))
+    subprocess.run(flags + extra + ["-Itests", "tests/test_motor_tuning.c",
+                   "tests/mock_hardware.c", "hardware/Src/motor.c", "hardware/Src/pwm.c",
+                   "-o", tuning_exe], check=True)
+    subprocess.run([tuning_exe], check=True)
+    mapping_exe = str(Path(temp) / ("test_joystick_mapping.exe" if os.name == "nt" else "test_joystick_mapping"))
+    subprocess.run(flags + extra + ["-Itests", "tests/test_joystick_mapping.c",
+                   "tests/mock_hardware.c", "hardware/Src/motor.c", "hardware/Src/pwm.c",
+                   "-lm", "-o", mapping_exe], check=True)
+    subprocess.run([mapping_exe], check=True)
+    motion_exe = str(Path(temp) / ("test_motion_profile.exe" if os.name == "nt" else "test_motion_profile"))
+    subprocess.run(flags + extra + ["-Itests", "tests/test_motion_profile.c",
+                   "tests/mock_hardware.c", "hardware/Src/ps2.c",
+                   "tests/mock_calibration_flash.c", "hardware/Src/calibration_store.c",
+                   "hardware/Src/calibration_control.c", "hardware/Src/motor.c",
+                   "hardware/Src/pwm.c", "-lm", "-o", motion_exe], check=True)
+    subprocess.run([motion_exe], check=True)
+    clock_exe = str(Path(temp) / ("test_delay_clock.exe" if os.name == "nt" else "test_delay_clock"))
+    subprocess.run(flags + extra + ["tests/test_delay_clock.c", "-o", clock_exe], check=True)
+    subprocess.run([clock_exe], check=True)
+    store_exe = str(Path(temp) / ("test_calibration_store.exe" if os.name == "nt" else "test_calibration_store"))
+    subprocess.run(flags + extra + ["-Itests", "tests/test_calibration_store.c",
+                   "tests/mock_calibration_flash.c", "hardware/Src/calibration_store.c",
+                   "-o", store_exe], check=True)
+    subprocess.run([store_exe], check=True)
+    calibration_exe = str(Path(temp) / ("test_calibration_control.exe" if os.name == "nt" else "test_calibration_control"))
+    subprocess.run(flags + extra + ["-Itests", "tests/test_calibration_control.c",
+                   "tests/mock_hardware.c", "tests/mock_calibration_flash.c",
+                   "hardware/Src/calibration_store.c", "hardware/Src/calibration_control.c",
+                   "hardware/Src/ps2.c", "hardware/Src/motor.c", "hardware/Src/pwm.c",
+                   "-o", calibration_exe], check=True)
+    subprocess.run([calibration_exe], check=True)

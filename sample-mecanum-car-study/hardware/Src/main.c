@@ -1,5 +1,6 @@
 #include "main.h"
 #include "stm32f10x.h"
+#include "calibration_control.h"
 
 #define CONTROL_LOOP_DELAY_MS  10U
 #define SPEED_LED_PIN          GPIO_Pin_13
@@ -36,7 +37,19 @@ static void speed_led_init(void)
 
 static void speed_led_step(void)
 {
-    if (motor_get_speed_percent() <= MOTOR_SPEED_LED_THRESHOLD)
+    uint8_t feedback_on;
+    if (!motor_output_above_percent(0))
+    {
+        if (calibration_control_led(&feedback_on))
+        {
+            if (feedback_on) GPIO_ResetBits(GPIOC, SPEED_LED_PIN);
+            else GPIO_SetBits(GPIOC, SPEED_LED_PIN);
+            speed_led_active = speed_led_steps = speed_led_on = 0;
+            return;
+        }
+    }
+    else calibration_control_reset_feedback();
+    if (!motor_output_above_percent(MOTOR_SPEED_LED_THRESHOLD))
     {
         GPIO_SetBits(GPIOC, SPEED_LED_PIN);
         speed_led_active = 0;
@@ -44,7 +57,9 @@ static void speed_led_step(void)
         speed_led_steps = 0;
         return;
     }
-    /* 严格超过60%才闪：70/80/90/100%亮灭提示，60%及以下灭。 */
+    /* 行驶时任一轮实际PWM严格超过60%才闪；停车时另有参数保存提示。
+     * 不是电流、温度或通信报警。
+     */
     if (!speed_led_active)
     {
         speed_led_active = 1;
@@ -59,24 +74,6 @@ static void speed_led_step(void)
         speed_led_on = (uint8_t)!speed_led_on;
         if (speed_led_on) GPIO_ResetBits(GPIOC, SPEED_LED_PIN);
         else GPIO_SetBits(GPIOC, SPEED_LED_PIN);
-    }
-}
-
-static void on_button_pressed(uint8_t button, const ps2_data *data)
-{
-    uint8_t speed = motor_get_speed_percent();
-    /* 原参考包 ax_ps2.h：btn2 bit2=L1、bit3=R1；不是 L2/R2。
-     * 同时按 L1/R1 不改变速度；按下边沿一次调一级，长按不重复。
-     */
-    if ((data->btn2 & 0x0CU) == 0x0CU) return;
-    if (button == PS2_BUTTON_L1)
-    {
-        motor_set_speed_percent(speed >= MOTOR_SPEED_STEP_PERCENT ?
-            (uint8_t)(speed - MOTOR_SPEED_STEP_PERCENT) : 0U);
-    }
-    else if (button == PS2_BUTTON_R1)
-    {
-        motor_set_speed_percent((uint8_t)(speed + MOTOR_SPEED_STEP_PERCENT));
     }
 }
 
@@ -122,8 +119,6 @@ static void buttons_process(const ps2_data *data)
         {
             is_down = (uint8_t)((data->btn2 >> (button - 8)) & 1U);
         }
-        if (!button_was_down[button] && is_down)
-            on_button_pressed(button, data);
         /* 其他动作沿用原项目：从“按下”变成“松开”时只执行一次。 */
         if (button_was_down[button] && !is_down)
         {
@@ -148,32 +143,43 @@ static void control_update(void)
     control_mode = ps2Data.mode;
     control_loops++;
     /* START在数字/模拟有效帧中都复位控制状态；优先于任何肩键。
-     * 速度回0、输出撤掉、按键历史清除；灯在本次step末随0%立即灭。
+     * 清空运动目标和按键历史；模拟模式启动有限制动，恢复默认上限100%。
+     * 制动结束、松键回中后再推杆才能启动；弱反向脉冲不超过闪灯门槛。
      */
     if (frame_valid && (ps2Data.btn1 & (1U << PS2_BUTTON_START)) != 0U)
     {
+        if (ps2Data.mode==PS2_MODE_ANALOG) motor_quick_stop();
+        else motor_stop(); /* 数字模式/诊断帧不能触发反转脉冲 */
         motor_set_speed_percent(MOTOR_SPEED_INITIAL_PERCENT);
         last_released_button = 255U;
+        calibration_control_reset_feedback(); /* START停车，保留用户已校准参数 */
+        control_ready=0; buttons_reset(); calibration_control_reset_inputs();
+        return; /* 长按请求不会重新计时，非阻塞制动由motor_update推进 */
     }
-    /* 数字模式只用于诊断，摇杆控制必须有模拟轴数据。START 立即撤驱动。 */
-    if (!frame_valid || ps2Data.mode != PS2_MODE_ANALOG ||
-        (ps2Data.btn1 & (1U << PS2_BUTTON_START)) != 0U)
+    /* 数字模式只用于诊断，摇杆控制必须有模拟轴数据。异常立即撤驱动。 */
+    if (!frame_valid || ps2Data.mode != PS2_MODE_ANALOG)
     {
         motor_stop();
         control_ready = 0;
         buttons_reset(); /* 丢包/停车不能被当成“用户松开按钮”。 */
+        calibration_control_reset_inputs();
         return;
     }
     if (!control_ready)
     {
-        motor_stop();
+        if (motor_get_stop_phase()==MOTOR_STOP_IDLE) motor_stop();
         buttons_reset();
+        calibration_control_reset_inputs();
         /* 上电/异常恢复后，先松开按键并让三个控制轴回中。 */
-        if (controls_are_neutral(&ps2Data))
+        if (motor_get_stop_phase()==MOTOR_STOP_IDLE && controls_are_neutral(&ps2Data))
         {
             control_ready = 1;
         }
         return;
+    }
+    if (calibration_control_poll(&ps2Data))
+    {
+        control_ready = 0; buttons_reset(); return; /* 保存后需松键回中 */
     }
     buttons_process(&ps2Data);
     /* uint8_t 会自动转换为函数需要的 float；这里不做速度换算。 */
@@ -183,7 +189,8 @@ static void control_update(void)
 static void control_step(void)
 {
     control_update();
-    /* 模式无效/START停车也继续显示速度档，不把灯当通信或运动状态。 */
+    motor_update(); /* 推进起步或有限制动；START清空目标且需松键回中 */
+    /* 指示实际PWM；停车脉冲低于60%，另有校准保存提示。 */
     speed_led_step();
 }
 
@@ -191,6 +198,7 @@ int main(void)
 {
     delay_init();
     motor_init(); /* 初始化 TIM2/TIM3，八个输入从低电平启动 */
+    calibration_control_init(); /* 加载本版有效参数，未保存过则用100/95默认值 */
     motor_stop();
     speed_led_init();
     ps2_init();
